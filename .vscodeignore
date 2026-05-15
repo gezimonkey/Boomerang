@@ -1,0 +1,9 @@
+**/.git/**
+**/.vscode/**
+**/node_modules/**
+src/**
+tsconfig.json
+dist/**
+*.vsix
+README.zh-CN.md
+需求文档.md

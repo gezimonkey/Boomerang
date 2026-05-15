@@ -1,0 +1,85 @@
+{
+  "name": "boomerang-notifier",
+  "displayName": "AI Completion Notifier - Boomerang",
+  "description": "Get instant phone alerts when Cursor or VS Code AI output finishes via multi-channel push services and webhooks.",
+  "version": "0.2.0",
+  "publisher": "local",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "boomerang.toggleMonitoring",
+        "title": "Boomerang: Toggle Monitoring"
+      }
+    ],
+    "configuration": {
+      "title": "Boomerang",
+      "properties": {
+        "boomerang.pushChannel": {
+          "type": "string",
+          "default": "Webhook 通道（企业微信/钉钉/飞书/Discord/Custom Webhook）",
+          "enum": [
+            "PushPlus",
+            "Server酱 (Turbo版)",
+            "Webhook 通道（企业微信/钉钉/飞书/Discord/Custom Webhook）",
+            "Bark",
+            "WxPusher",
+            "ntfy.sh",
+            "Telegram"
+          ],
+          "description": "Push channel selection."
+        },
+        "boomerang.targetValue": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "目标凭证 (Target Value)。\n\n**注意**：VS Code 不支持根据上方选项动态修改此处的说明文本，但当您切换上方 `pushChannel` 时，本输入框的**内容会自动填充**对应平台的示例格式。\n\n**常见格式说明**：\n- **大多数通道**：直接填入 Token / Key。\n- **Webhook**：填入 URL。若开启了安全关键词，使用 `|` 拼接，如 `https://...|Boomerang`\n- **WxPusher**：`AT_xxx/UID_xxx` (凭证/用户ID)\n- **Telegram**：`bot_token/chat_id`"
+        },
+        "boomerang.idleTimeout": {
+          "type": "number",
+          "default": 8000,
+          "minimum": 1000,
+          "description": "Idle timeout threshold in milliseconds."
+        },
+        "boomerang.notificationTemplate": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Custom notification text. Supports `{source}` placeholder. Leave empty to use built-in humorous and friendly messages."
+        },
+        "boomerang.slowNotificationTemplate": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Custom text for slow-response alert. Triggered when chat logs include `taking longer than expected`. Supports `{source}` placeholder."
+        }
+      }
+    },
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "boomerang.toggleMonitoring"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.9",
+    "@types/vscode": "^1.90.0",
+    "eslint": "^9.5.0",
+    "typescript": "^5.5.4"
+  }
+}
