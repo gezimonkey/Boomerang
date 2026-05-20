@@ -5,6 +5,10 @@
   "version": "0.2.0",
   "icon": "assets/logo.png",
   "publisher": "local",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gezimonkey/Boomerang.git"
+  },
   "license": "MIT",
   "sponsor": {
     "url": "https://ko-fi.com/gezimonkey"
