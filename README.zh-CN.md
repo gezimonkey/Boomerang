@@ -2,6 +2,12 @@
 <p align="center">
   <img src="assets/logo.png" width="128" alt="Boomerang Logo" />
 </p>
+<p align="center">
+  <a href="https://github.com/gezimonkey/Boomerang/stargazers"><img src="https://img.shields.io/github/stars/gezimonkey/Boomerang?style=flat-square&color=blue" alt="GitHub stars"></a>
+  <a href="https://github.com/gezimonkey/Boomerang/network/members"><img src="https://img.shields.io/github/forks/gezimonkey/Boomerang?style=flat-square&color=blue" alt="GitHub forks"></a>
+  <a href="https://github.com/gezimonkey/Boomerang/issues"><img src="https://img.shields.io/github/issues/gezimonkey/Boomerang?style=flat-square&color=blue" alt="GitHub issues"></a>
+  <a href="https://github.com/gezimonkey/Boomerang/blob/main/LICENSE"><img src="https://img.shields.io/github/license/gezimonkey/Boomerang?style=flat-square&color=blue" alt="License"></a>
+</p>
 
 Boomerang Notifier 是一个 VS Code / Cursor 插件，用于在 AI 代码生成或聊天输出结束时，通过多种通知渠道把提醒发送给你。
 
@@ -19,13 +25,13 @@ Boomerang Notifier 是一个 VS Code / Cursor 插件，用于在 AI 代码生成
 在设置里搜索 `boomerang`：
 
 - `boomerang.pushChannel`  
-  选择推送通道。
+选择推送通道。
 - `boomerang.targetValue`  
-  通道目标值，支持 `main|keyword` 格式。
+通道目标值，支持 `main|keyword` 格式。
 - `boomerang.idleTimeout`  
-  静止阈值（毫秒）。
+静止阈值（毫秒）。
 - `boomerang.notificationTemplate`  
-  完成通知模板（支持 `{source}` 占位符）。
+完成通知模板（支持 `{source}` 占位符）。
 
 ## 🚀 使用方法
 
@@ -43,13 +49,13 @@ Boomerang Notifier 是一个 VS Code / Cursor 插件，用于在 AI 代码生成
 2. 选择输出通道 `Boomerang`。
 3. 检查日志中的响应信息（`status`、`errcode`、`errmsg`）。
 
-
 ## ☕️ 支持作者 (Support)
 
 Boomerang 是一款免费开源的插件，致力于为你节省盯着屏幕发呆的时间。
 如果这个插件让你少熬了几个夜，或者让你安心地去喝了杯咖啡，欢迎请作者喝杯咖啡！你的支持是我持续维护和开发新功能的动力。
 
-<a href="https://ko-fi.com/gezimonkey" target="_blank"><img src="https://storage.ko-fi.com/cdn/kofi2.png?v=3" alt="Buy Me a Coffee at ko-fi.com" height="45" style="border:0px;height:45px;" /></a>
 
-<br><br>
-<img src="https://raw.githubusercontent.com/gezimonkey/Boomerang/main/assets/weixin.jpg" width="300" alt="微信打赏">
+
+  
+  
+

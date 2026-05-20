@@ -2,6 +2,12 @@
 <p align="center">
   <img src="assets/logo.png" width="128" alt="Boomerang Logo" />
 </p>
+<p align="center">
+  <a href="https://github.com/gezimonkey/Boomerang/stargazers"><img src="https://img.shields.io/github/stars/gezimonkey/Boomerang?style=flat-square&color=blue" alt="GitHub stars"></a>
+  <a href="https://github.com/gezimonkey/Boomerang/network/members"><img src="https://img.shields.io/github/forks/gezimonkey/Boomerang?style=flat-square&color=blue" alt="GitHub forks"></a>
+  <a href="https://github.com/gezimonkey/Boomerang/issues"><img src="https://img.shields.io/github/issues/gezimonkey/Boomerang?style=flat-square&color=blue" alt="GitHub issues"></a>
+  <a href="https://github.com/gezimonkey/Boomerang/blob/main/LICENSE"><img src="https://img.shields.io/github/license/gezimonkey/Boomerang?style=flat-square&color=blue" alt="License"></a>
+</p>
 
 Boomerang Notifier is a VS Code / Cursor extension that alerts you when AI output is complete through multiple notification channels.
 
