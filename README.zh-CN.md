@@ -9,6 +9,12 @@
   <a href="https://github.com/gezimonkey/Boomerang/blob/main/LICENSE"><img src="https://img.shields.io/github/license/gezimonkey/Boomerang?style=flat-square&color=blue" alt="License"></a>
 </p>
 
+<p align="center">
+  <a href="https://star-history.com/#gezimonkey/Boomerang&Date">
+    <img src="https://api.star-history.com/svg?repos=gezimonkey/Boomerang&type=Date" alt="Star History Chart" width="500">
+  </a>
+</p>
+
 Boomerang Notifier 是一个 VS Code / Cursor 插件，用于在 AI 代码生成或聊天输出结束时，通过多种通知渠道把提醒发送给你。
 
 ## ✨ 功能特性

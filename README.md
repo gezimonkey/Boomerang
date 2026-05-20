@@ -9,6 +9,12 @@
   <a href="https://github.com/gezimonkey/Boomerang/blob/main/LICENSE"><img src="https://img.shields.io/github/license/gezimonkey/Boomerang?style=flat-square&color=blue" alt="License"></a>
 </p>
 
+<p align="center">
+  <a href="https://star-history.com/#gezimonkey/Boomerang&Date">
+    <img src="https://api.star-history.com/svg?repos=gezimonkey/Boomerang&type=Date" alt="Star History Chart" width="500">
+  </a>
+</p>
+
 Boomerang Notifier is a VS Code / Cursor extension that alerts you when AI output is complete through multiple notification channels.
 
 For Chinese documentation, see [README.zh-CN.md](./README.zh-CN.md).
