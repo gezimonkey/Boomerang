@@ -50,4 +50,7 @@ If notifications are not delivered:
 
 Boomerang is a free and open-source extension. If it has saved you from staring at the screen for hours and allowed you to grab a coffee in peace, consider buying me one! Your support is my motivation to keep maintaining and developing new features.
 
+<a href="https://ko-fi.com/gezimonkey" target="_blank"><img src="https://storage.ko-fi.com/cdn/kofi2.png?v=3" alt="Buy Me a Coffee at ko-fi.com" height="45" style="border:0px;height:45px;" /></a>
+
+<br><br>
 <img src="https://raw.githubusercontent.com/gezimonkey/Boomerang/main/assets/weixin.jpg" width="300" alt="WeChat Donation">

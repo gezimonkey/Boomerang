@@ -49,4 +49,7 @@ Boomerang Notifier 是一个 VS Code / Cursor 插件，用于在 AI 代码生成
 Boomerang 是一款免费开源的插件，致力于为你节省盯着屏幕发呆的时间。
 如果这个插件让你少熬了几个夜，或者让你安心地去喝了杯咖啡，欢迎请作者喝杯咖啡！你的支持是我持续维护和开发新功能的动力。
 
+<a href="https://ko-fi.com/gezimonkey" target="_blank"><img src="https://storage.ko-fi.com/cdn/kofi2.png?v=3" alt="Buy Me a Coffee at ko-fi.com" height="45" style="border:0px;height:45px;" /></a>
+
+<br><br>
 <img src="https://raw.githubusercontent.com/gezimonkey/Boomerang/main/assets/weixin.jpg" width="300" alt="微信打赏">

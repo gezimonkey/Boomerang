@@ -6,6 +6,9 @@
   "icon": "assets/logo.png",
   "publisher": "local",
   "license": "MIT",
+  "sponsor": {
+    "url": "https://ko-fi.com/gezimonkey"
+  },
   "engines": {
     "vscode": "^1.90.0"
   },
