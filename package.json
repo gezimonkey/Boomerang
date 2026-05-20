@@ -4,7 +4,7 @@
   "description": "Get instant phone alerts when Cursor or VS Code AI output finishes via multi-channel push services and webhooks.",
   "version": "0.2.0",
   "icon": "assets/logo.png",
-  "publisher": "local",
+  "publisher": "gezimonkey",
   "repository": {
     "type": "git",
     "url": "https://github.com/gezimonkey/Boomerang.git"
