@@ -3,7 +3,7 @@
   <img src="assets/logo.png" width="128" alt="Boomerang Logo" />
 </p>
 
-Boomerang Notifier 是一个 VS Code / Cursor 插件，用于在 AI 代码生成或聊天输出结束时，通过 Webhook 把提醒发送到你的手机。
+Boomerang Notifier 是一个 VS Code / Cursor 插件，用于在 AI 代码生成或聊天输出结束时，通过多种通知渠道把提醒发送给你。
 
 ## ✨ 功能特性
 
@@ -42,3 +42,11 @@ Boomerang Notifier 是一个 VS Code / Cursor 插件，用于在 AI 代码生成
 1. 打开 `View: Output`。
 2. 选择输出通道 `Boomerang`。
 3. 检查日志中的响应信息（`status`、`errcode`、`errmsg`）。
+
+
+## ☕️ 支持作者 (Support)
+
+Boomerang 是一款免费开源的插件，致力于为你节省盯着屏幕发呆的时间。
+如果这个插件让你少熬了几个夜，或者让你安心地去喝了杯咖啡，欢迎请作者喝杯咖啡！你的支持是我持续维护和开发新功能的动力。
+
+<img src="https://raw.githubusercontent.com/gezimonkey/Boomerang/main/assets/weixin.jpg" width="300" alt="微信打赏">
