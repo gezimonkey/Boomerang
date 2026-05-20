@@ -18,6 +18,7 @@ interface RendererWatcherState {
 const DEFAULT_EDITOR_IDLE_TIMEOUT_MS = 8000;
 const MAX_RENDERER_SEARCH_DEPTH = 6;
 const RENDERER_POLL_INTERVAL_MS = 2000;
+const RENDERER_BOOTSTRAP_READ_BYTES = 256 * 1024;
 const TARGET_VALUE_EXAMPLES: Record<PushChannel, string> = {
   "PushPlus": "your_pushplus_token",
   "Server酱 (Turbo版)": "SCTxxxxxxxxxxxxxxxxxxxxx",
@@ -332,10 +333,14 @@ function startRendererWatchers(context: vscode.ExtensionContext): void {
   stopRendererWatchers();
   const rendererLogPaths = discoverRendererLogFiles(context.logUri.fsPath);
   log(`renderer.log候选文件: ${rendererLogPaths.join(" | ") || "(none)"}`);
+  let inferredChatActive = false;
 
   for (const filePath of rendererLogPaths) {
     try {
       const initialOffset = getFileSize(filePath);
+      if (!inferredChatActive && inferChatGenerationActiveFromLog(filePath)) {
+        inferredChatActive = true;
+      }
       const watcher = fs.watch(filePath, (eventType) => {
         if (eventType !== "change") {
           return;
@@ -379,6 +384,63 @@ function startRendererWatchers(context: vscode.ExtensionContext): void {
     void vscode.window.showWarningMessage(t("noRenderer"));
   } else {
     log(`renderer日志监听已启动: count=${rendererWatchers.length}`);
+    if (monitorState === "armed" && inferredChatActive) {
+      chatGenerationActive = true;
+      setState("monitoring");
+      log("根据历史renderer日志判定: 开启监控时聊天已在生成中");
+    }
+  }
+}
+
+function inferChatGenerationActiveFromLog(filePath: string): boolean {
+  const fileSize = getFileSize(filePath);
+  if (fileSize <= 0) {
+    return false;
+  }
+
+  const readStart = Math.max(0, fileSize - RENDERER_BOOTSTRAP_READ_BYTES);
+  const bytesToRead = fileSize - readStart;
+  if (bytesToRead <= 0) {
+    return false;
+  }
+
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(filePath, "r");
+    const buffer = Buffer.alloc(bytesToRead);
+    fs.readSync(fd, buffer, 0, bytesToRead, readStart);
+    const lines = buffer.toString("utf8").split(/\r?\n/);
+    let active = false;
+
+    for (const line of lines) {
+      const lower = line.toLowerCase();
+      const isChatStart = lower.includes("reason=\"agent-loop\"")
+        && (lower.includes("composerwakelockmanager") || lower.includes("acquired wakelock") || lower.includes("[buildrequestedmodel]"));
+      const isTakingLongerThanExpected = isSlowResponseHintLine(lower);
+      const isChatEnd = lower.includes("reason=\"generation-ended\"")
+        && (lower.includes("composerwakelockmanager") || lower.includes("released wakelock"));
+
+      if (isChatStart || isTakingLongerThanExpected) {
+        active = true;
+        continue;
+      }
+      if (isChatEnd) {
+        active = false;
+      }
+    }
+
+    return active;
+  } catch (error) {
+    log(`历史renderer日志回看失败: file=${filePath}, error=${String(error instanceof Error ? error.message : error)}`);
+    return false;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // ignore close error
+      }
+    }
   }
 }
 
@@ -424,8 +486,7 @@ function processRendererLine(line: string): void {
     return;
   }
 
-  const isTakingLongerThanExpected = lower.includes("taking longer than expected")
-    && (lower.includes("chat") || lower.includes("agent") || lower.includes("composer") || lower.includes("copilot") || lower.includes("openai"));
+  const isTakingLongerThanExpected = isSlowResponseHintLine(lower);
   if (isTakingLongerThanExpected) {
     const wasActive = chatGenerationActive;
     chatGenerationActive = true;
@@ -448,6 +509,10 @@ function processRendererLine(line: string): void {
     log("命中聊天结束事件: renderer generation-ended released");
     void handleChatGenerationEnded();
   }
+}
+
+function isSlowResponseHintLine(lowerLine: string): boolean {
+  return lowerLine.includes("taking longer than expected");
 }
 
 function discoverRendererLogFiles(baseLogPath: string): string[] {
@@ -588,12 +653,6 @@ function buildNotificationMessage(sourceLabel: string): string {
 }
 
 function buildSlowNotificationMessage(sourceLabel: string): string {
-  const config = vscode.workspace.getConfiguration("boomerang");
-  const customTemplate = config.get<string>("slowNotificationTemplate", "").trim();
-  if (customTemplate) {
-    return customTemplate.replace(/\{source\}/g, sourceLabel);
-  }
-
   if (locale === "zh-CN") {
     return `⏳ AI 输出出现长耗时，可能是网络波动或连接短暂异常。建议你看一眼聊天窗口确认状态。（来源：${sourceLabel}）`;
   }

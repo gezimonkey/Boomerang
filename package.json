@@ -3,6 +3,7 @@
   "displayName": "AI Completion Notifier - Boomerang",
   "description": "Get instant phone alerts when Cursor or VS Code AI output finishes via multi-channel push services and webhooks.",
   "version": "0.2.0",
+  "icon": "assets/logo.png",
   "publisher": "local",
   "license": "MIT",
   "engines": {
@@ -42,7 +43,7 @@
         "boomerang.targetValue": {
           "type": "string",
           "default": "",
-          "markdownDescription": "目标凭证 (Target Value)。\n\n**注意**：VS Code 不支持根据上方选项动态修改此处的说明文本，但当您切换上方 `pushChannel` 时，本输入框的**内容会自动填充**对应平台的示例格式。\n\n**常见格式说明**：\n- **大多数通道**：直接填入 Token / Key。\n- **Webhook**：填入 URL。若开启了安全关键词，使用 `|` 拼接，如 `https://...|Boomerang`\n- **WxPusher**：`AT_xxx/UID_xxx` (凭证/用户ID)\n- **Telegram**：`bot_token/chat_id`"
+          "markdownDescription": "Target value formats by channel:\n- PushPlus: `token`\n- Server酱 (Turbo版): `sendKey`\n- Webhook channel: `webhook_url|keyword`\n- Bark: `base_url_or_key`\n- WxPusher: `AT_xxx/UID_xxx`\n- ntfy.sh: `topic`\n- Telegram: `botToken/chatId`"
         },
         "boomerang.idleTimeout": {
           "type": "number",
@@ -54,11 +55,6 @@
           "type": "string",
           "default": "",
           "markdownDescription": "Custom notification text. Supports `{source}` placeholder. Leave empty to use built-in humorous and friendly messages."
-        },
-        "boomerang.slowNotificationTemplate": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Custom text for slow-response alert. Triggered when chat logs include `taking longer than expected`. Supports `{source}` placeholder."
         }
       }
     },

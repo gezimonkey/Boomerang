@@ -1,4 +1,7 @@
 # 🪃 Boomerang Notifier（中文说明）
+<p align="center">
+  <img src="assets/logo.png" width="128" alt="Boomerang Logo" />
+</p>
 
 Boomerang Notifier 是一个 VS Code / Cursor 插件，用于在 AI 代码生成或聊天输出结束时，通过 Webhook 把提醒发送到你的手机。
 
@@ -23,8 +26,6 @@ Boomerang Notifier 是一个 VS Code / Cursor 插件，用于在 AI 代码生成
   静止阈值（毫秒）。
 - `boomerang.notificationTemplate`  
   完成通知模板（支持 `{source}` 占位符）。
-- `boomerang.slowNotificationTemplate`  
-  长耗时提醒模板（支持 `{source}` 占位符）。
 
 ## 🚀 使用方法
 

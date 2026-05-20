@@ -29,13 +29,15 @@ interface TargetParsed {
 interface WxPusherParsedTarget {
   appToken: string;
   uids: string[];
-  topicIds: number[];
 }
 
 export async function sendBoomerang(channel: PushChannel, targetValue: string, baseMessage: string): Promise<SendResult> {
   const parsed = parseTargetValue(targetValue);
   if (!parsed.main) {
     throw new Error("targetValue is empty");
+  }
+  if (channel === "Webhook 通道（企业微信/钉钉/飞书/Discord/Custom Webhook）" && !parsed.keyword) {
+    throw new Error("Webhook targetValue must be webhook_url|keyword");
   }
 
   const message = parsed.keyword ? `${parsed.keyword} ${baseMessage}`.trim() : baseMessage;
@@ -81,9 +83,6 @@ export async function sendBoomerang(channel: PushChannel, targetValue: string, b
       if (wxTarget.uids.length > 0) {
         payload.uids = wxTarget.uids;
       }
-      if (wxTarget.topicIds.length > 0) {
-        payload.topicIds = wxTarget.topicIds;
-      }
       return postJson("https://wxpusher.zjiecode.com/api/send/message", payload);
     },
     "ntfy.sh": async () => {
@@ -126,7 +125,7 @@ function parseWxPusherTarget(main: string): WxPusherParsedTarget {
     .filter((part) => part.length > 0);
 
   if (parts.length < 2) {
-    throw new Error("WxPusher targetValue format invalid. Use AT_xxx/UID_xxx|your_keyword or AT_xxx/123|your_keyword");
+    throw new Error("WxPusher targetValue format invalid. Use AT_xxx/UID_xxx|your_keyword");
   }
 
   const appToken = parts[0];
@@ -135,38 +134,19 @@ function parseWxPusherTarget(main: string): WxPusherParsedTarget {
   }
 
   const uids: string[] = [];
-  const topicIds: number[] = [];
   for (const receiver of parts.slice(1)) {
     if (receiver.startsWith("UID_")) {
       uids.push(receiver);
       continue;
     }
-
-    const topicId = parseWxPusherTopicId(receiver);
-    if (topicId !== undefined) {
-      topicIds.push(topicId);
-      continue;
-    }
-
-    throw new Error("WxPusher receiver must be UID_xxx or topicId. Example: AT_xxx/UID_xxx|your_keyword");
+    throw new Error("WxPusher receiver must be UID_xxx. Example: AT_xxx/UID_xxx|your_keyword");
   }
 
-  if (uids.length === 0 && topicIds.length === 0) {
-    throw new Error("WxPusher targetValue missing receiver. Provide UID_xxx or topicId.");
+  if (uids.length === 0) {
+    throw new Error("WxPusher targetValue missing receiver. Provide UID_xxx.");
   }
 
-  return { appToken, uids, topicIds };
-}
-
-function parseWxPusherTopicId(value: string): number | undefined {
-  if (/^\d+$/.test(value)) {
-    return Number(value);
-  }
-  const matched = value.match(/^topic[:_]?(\d+)$/i);
-  if (matched) {
-    return Number(matched[1]);
-  }
-  return undefined;
+  return { appToken, uids };
 }
 
 async function get(url: string): Promise<HttpResult> {

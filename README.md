@@ -1,4 +1,7 @@
 # 🪃 Boomerang Notifier
+<p align="center">
+  <img src="assets/logo.png" width="128" alt="Boomerang Logo" />
+</p>
 
 Boomerang Notifier is a VS Code / Cursor extension that alerts you on your phone when AI output is complete.
 
@@ -25,8 +28,6 @@ Set these in Settings (search `boomerang`):
   Idle timeout threshold in milliseconds.
 - `boomerang.notificationTemplate`  
   Custom completion notification template (`{source}` supported).
-- `boomerang.slowNotificationTemplate`  
-  Custom slow-response notification template (`{source}` supported).
 
 ## 🚀 Usage
 
