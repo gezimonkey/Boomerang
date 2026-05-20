@@ -3,7 +3,7 @@
   <img src="assets/logo.png" width="128" alt="Boomerang Logo" />
 </p>
 
-Boomerang Notifier is a VS Code / Cursor extension that alerts you on your phone when AI output is complete.
+Boomerang Notifier is a VS Code / Cursor extension that alerts you when AI output is complete through multiple notification channels.
 
 For Chinese documentation, see [README.zh-CN.md](./README.zh-CN.md).
 
@@ -35,7 +35,7 @@ Set these in Settings (search `boomerang`):
 2. Configure `boomerang.pushChannel` and `boomerang.targetValue`.
 3. Run `Boomerang: Toggle Monitoring` from Command Palette.
 4. Start an AI coding/chat task.
-5. When AI output ends, Boomerang sends a webhook notification.
+5. When AI output ends, Boomerang sends a notification via your configured channel.
 
 ## 🛠️ Debugging
 
@@ -44,3 +44,10 @@ If notifications are not delivered:
 1. Open `View: Output`.
 2. Select `Boomerang` in the channel dropdown.
 3. Check webhook response logs (`status`, `errcode`, `errmsg`).
+
+
+## ☕️ Support the Author
+
+Boomerang is a free and open-source extension. If it has saved you from staring at the screen for hours and allowed you to grab a coffee in peace, consider buying me one! Your support is my motivation to keep maintaining and developing new features.
+
+<img src="https://raw.githubusercontent.com/gezimonkey/Boomerang/main/assets/weixin.jpg" width="300" alt="WeChat Donation">
