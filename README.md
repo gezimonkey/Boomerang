@@ -28,6 +28,15 @@ For Chinese documentation, see [README.zh-CN.md](./README.zh-CN.md).
 - One-click monitoring control from the status bar with friendly emoji UI messages.
 - English and Simplified Chinese UI messages (auto-detected from IDE language).
 
+## 🧩 Compatibility
+
+- VS Code `< 1.90` is not supported.
+- On VS Code, Boomerang supports chat lifecycle signals from:
+  - `GitHub Copilot Chat.log` (`exthost/GitHub.copilot-chat/GitHub Copilot Chat.log`)
+  - `Codex.log` (`exthost/openai.chatgpt/Codex.log`)
+- Claude local sessions:
+  - `~/.claude/projects/**/*.jsonl` (new file = session start; appended lines = activity; idle timeout = session end)
+
 ## ⚙️ Configuration
 
 Set these in Settings (search `boomerang`):
@@ -38,6 +47,8 @@ Set these in Settings (search `boomerang`):
   Channel target value. Supports `main|keyword`.
 - `boomerang.idleTimeout`  
   Idle timeout threshold in milliseconds.
+- `boomerang.claudeIdleSeconds`  
+  Claude JSONL session idle timeout in seconds (default `600`).
 - `boomerang.notificationTemplate`  
   Custom completion notification template (`{source}` supported).
 

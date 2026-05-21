@@ -6,18 +6,38 @@ import { sendBoomerang, type PushChannel } from "./notifier";
 type MonitorState = "idle" | "armed" | "monitoring" | "delayed" | "notifying";
 type ActivitySource = "editor" | "chat";
 type Locale = "en" | "zh-CN";
+type IDEType = "vscode" | "cursor";
 
 interface RendererWatcherState {
   filePath: string;
+  source: "renderer" | "vscode-copilot-chat-log" | "vscode-codex-log";
   watcher: fs.FSWatcher;
   readOffsetBytes: number;
   pendingLine: string;
   pollTimer: NodeJS.Timeout;
 }
 
+interface ClaudeSessionState {
+  filePath: string;
+  sessionId: string;
+  readOffsetBytes: number;
+  pendingLine: string;
+  firstTimestamp?: string;
+  lastTimestamp?: string;
+  lastActiveAt: number;
+  active: boolean;
+  started: boolean;
+}
+
 const DEFAULT_EDITOR_IDLE_TIMEOUT_MS = 8000;
+const DEFAULT_CLAUDE_IDLE_SECONDS = 600;
+const VSCODE_COPILOT_CHAT_IDLE_END_MS = 10 * 60 * 1000;
+const VSCODE_COPILOT_INFER_ACTIVE_MAX_AGE_MS = 12000;
+const VSCODE_CODEX_STREAM_IDLE_END_MS = 10 * 60 * 1000;
+const VSCODE_CODEX_INFER_ACTIVE_MAX_AGE_MS = 12000;
 const MAX_RENDERER_SEARCH_DEPTH = 6;
 const RENDERER_POLL_INTERVAL_MS = 2000;
+const CLAUDE_SCAN_INTERVAL_MS = 2000;
 const RENDERER_BOOTSTRAP_READ_BYTES = 256 * 1024;
 const TARGET_VALUE_EXAMPLES: Record<PushChannel, string> = {
   "PushPlus": "your_pushplus_token",
@@ -51,13 +71,22 @@ let idleTimer: NodeJS.Timeout | undefined;
 let statusBarItem: vscode.StatusBarItem | undefined;
 let outputChannel: vscode.OutputChannel | undefined;
 let rendererWatchers: RendererWatcherState[] = [];
+let claudeSessionStates = new Map<string, ClaudeSessionState>();
+let claudeScanTimer: NodeJS.Timeout | undefined;
 let chatGenerationActive = false;
+let vscodeCopilotChatIdleTimer: NodeJS.Timeout | undefined;
+let vscodeCodexStreamEndTimer: NodeJS.Timeout | undefined;
 let slowNotificationSent = false;
 let slowNotificationInFlight = false;
+let idleFallbackNotificationSent = false;
+let idleFallbackNotificationInFlight = false;
+let lastCopilotActivityAt: number = 0;  // 追踪最后一次检测到的 Copilot 活动时间戳
 
 let lastIgnoredLogSignature = "";
 let lastIgnoredLogAt = 0;
 const locale: Locale = vscode.env.language.toLowerCase().startsWith("zh") ? "zh-CN" : "en";
+let detectedIDEType: IDEType = "vscode";
+let userDataPath: string = "";
 
 const TEXT: Record<Locale, Record<string, string>> = {
   "en": {
@@ -68,8 +97,9 @@ const TEXT: Record<Locale, Record<string, string>> = {
     configInvalid: "⚠️ Boomerang: Channel configuration is invalid. Please check `pushChannel` and `targetValue` examples in Settings.",
     notifySent: "✅ Boomerang: Notification sent.",
     slowNotifySent: "⚠️ Boomerang: Slow response alert sent.",
+    idleFallbackNotifySent: "⚠️ Boomerang: Idle fallback alert sent (monitoring continues).",
     notifyFailedPrefix: "❌ Boomerang: Notification failed - ",
-    noRenderer: "Boomerang: No available renderer.log found; chat completion detection is unavailable.",
+    noRenderer: "Boomerang: No available chat lifecycle log found (renderer/Copilot/Codex/Claude); chat completion detection is unavailable.",
     sourceEditor: "Editor",
     sourceChat: "Chat",
     statusIdleText: "$(sleep) Idle",
@@ -91,8 +121,9 @@ const TEXT: Record<Locale, Record<string, string>> = {
     configInvalid: "⚠️ Boomerang: 通道配置无效，请检查设置中的 `pushChannel` 和 `targetValue` 示例。",
     notifySent: "✅ Boomerang: 已发送提醒通知。",
     slowNotifySent: "⚠️ Boomerang: 已发送长耗时提醒。",
+    idleFallbackNotifySent: "⚠️ Boomerang: 已发送超长未结束提醒（监控继续）。",
     notifyFailedPrefix: "❌ Boomerang: 通知发送失败 - ",
-    noRenderer: "Boomerang: 未发现可用 renderer.log，聊天结束检测不可用。",
+    noRenderer: "Boomerang: 未发现可用聊天生命周期日志（renderer/Copilot/Codex/Claude），聊天结束检测不可用。",
     sourceEditor: "文档",
     sourceChat: "聊天",
     statusIdleText: "$(sleep) 监控闲置",
@@ -112,9 +143,55 @@ function t(key: string): string {
   return TEXT[locale][key] ?? TEXT["en"][key] ?? key;
 }
 
+function detectIDEType(): { ide: IDEType; userDataPath: string } {
+  const appName = vscode.env.appName.toLowerCase();
+  
+  // 检测IDE类型
+  const isVSCode = appName.includes("visual studio code") || appName.includes("code");
+  const isCursor = appName.includes("cursor");
+  const ide: IDEType = isCursor ? "cursor" : "vscode";
+  
+  // 获取AppData路径
+  let userDataPath = "";
+  const platform = process.platform;
+  const userHome = process.env.HOME || process.env.USERPROFILE || "";
+  
+  if (platform === "win32") {
+    const appDataBase = process.env.APPDATA || path.join(userHome, "AppData", "Roaming");
+    if (isCursor) {
+      userDataPath = path.join(appDataBase, "Cursor");
+    } else {
+      userDataPath = path.join(appDataBase, "Code");
+    }
+  } else if (platform === "darwin") {
+    if (isCursor) {
+      userDataPath = path.join(userHome, "Library", "Application Support", "Cursor");
+    } else {
+      userDataPath = path.join(userHome, "Library", "Application Support", "Code");
+    }
+  } else {
+    // Linux
+    if (isCursor) {
+      userDataPath = path.join(userHome, ".config", "Cursor");
+    } else {
+      userDataPath = path.join(userHome, ".config", "Code");
+    }
+  }
+  
+  return { ide, userDataPath };
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   outputChannel = vscode.window.createOutputChannel("Boomerang");
+  
+  // 检测IDE类型
+  const { ide, userDataPath: detectedPath } = detectIDEType();
+  detectedIDEType = ide;
+  userDataPath = detectedPath;
+  
   log("插件激活");
+  log(`检测到的IDE: ${detectedIDEType}`);
+  log(`用户数据路径: ${userDataPath}`);
   log(`当前窗口工作区: ${vscode.workspace.workspaceFolders?.map((f) => f.uri.fsPath).join(" | ") ?? "(none)"}`);
 
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
@@ -158,12 +235,16 @@ export function activate(context: vscode.ExtensionContext): void {
     if (!channel) {
       return;
     }
-    void syncTargetValueExample(channel);
+    syncTargetValueExample(channel).catch((error) => {
+      log(`配置同步错误: ${String(error instanceof Error ? error.message : error)}`);
+    });
   });
 
   const initialChannel = vscode.workspace.getConfiguration("boomerang").get<PushChannel>("pushChannel");
   if (initialChannel) {
-    void syncTargetValueExample(initialChannel);
+    syncTargetValueExample(initialChannel).catch((error) => {
+      log(`初始化配置同步错误: ${String(error instanceof Error ? error.message : error)}`);
+    });
   }
 
   context.subscriptions.push(
@@ -186,6 +267,11 @@ function registerActivity(source: ActivitySource): void {
   lastActivitySource = source;
   log(`检测到活动: source=${source}`);
 
+  if (source === "chat") {
+    // 初始化 Copilot 活动时间戳
+    lastCopilotActivityAt = Date.now();
+  }
+
   if (monitorState === "armed") {
     setState("monitoring");
   }
@@ -201,7 +287,9 @@ function scheduleEditorIdleDetection(): void {
   log(`重置编辑器静默计时器: timeoutMs=${timeout}`);
 
   idleTimer = setTimeout(() => {
-    void handleEditorIdleTimeout();
+    handleEditorIdleTimeout().catch((error) => {
+      log(`编辑器空闲处理错误: ${String(error instanceof Error ? error.message : error)}`);
+    });
   }, timeout);
 }
 
@@ -302,6 +390,40 @@ async function sendSlowNotification(source: ActivitySource): Promise<void> {
     slowNotificationInFlight = false;
   }
 }
+
+async function sendIdleFallbackNotification(source: ActivitySource): Promise<void> {
+  if (idleFallbackNotificationSent || idleFallbackNotificationInFlight) {
+    return;
+  }
+
+  const channel = vscode.workspace.getConfiguration("boomerang").get<PushChannel>("pushChannel");
+  const targetValue = vscode.workspace.getConfiguration("boomerang").get<string>("targetValue", "").trim();
+  if (!channel || !targetValue) {
+    log("超长未结束提醒跳过: pushChannel 或 targetValue 未配置");
+    void vscode.window.showWarningMessage(!channel ? t("channelMissing") : t("targetMissing"));
+    return;
+  }
+
+  const sourceLabel = source === "editor" ? t("sourceEditor") : t("sourceChat");
+  const message = buildIdleFallbackNotificationMessage(sourceLabel);
+  idleFallbackNotificationInFlight = true;
+  try {
+    const result = await sendBoomerangWithRetry(channel, targetValue, message, 3);
+    idleFallbackNotificationSent = true;
+    log(`超长未结束提醒响应: channel=${channel}, status=${result.statusCode}, body=${truncateForLog(result.bodyText, 300)}`);
+    void vscode.window.showWarningMessage(t("idleFallbackNotifySent"));
+  } catch (error) {
+    const msg = String(error instanceof Error ? error.message : error);
+    log(`超长未结束提醒发送失败: ${msg}`);
+    if (isConfigurationError(msg)) {
+      void vscode.window.showWarningMessage(`${t("configInvalid")} (${msg})`);
+      return;
+    }
+    void vscode.window.showErrorMessage(`${t("notifyFailedPrefix")}${msg}`);
+  } finally {
+    idleFallbackNotificationInFlight = false;
+  }
+}
 async function sendBoomerangWithRetry(
   channel: PushChannel,
   targetValue: string,
@@ -331,14 +453,46 @@ async function sendBoomerangWithRetry(
 
 function startRendererWatchers(context: vscode.ExtensionContext): void {
   stopRendererWatchers();
+  const claudeMonitoringReady = startClaudeSessionMonitoring();
+  const sessionContext = locateSessionAndWindow(context.logUri.fsPath);
   const rendererLogPaths = discoverRendererLogFiles(context.logUri.fsPath);
   log(`renderer.log候选文件: ${rendererLogPaths.join(" | ") || "(none)"}`);
+  const vscodeCopilotChatLogPaths = detectedIDEType === "vscode"
+    ? discoverVSCodeCopilotChatLogFiles(userDataPath, sessionContext.sessionDir, sessionContext.windowDirName)
+    : [];
+  if (vscodeCopilotChatLogPaths.length > 0) {
+    log(`VSCode Copilot Chat.log候选文件: ${vscodeCopilotChatLogPaths.join(" | ")}`);
+  }
+  const vscodeCodexLogPaths = detectedIDEType === "vscode"
+    ? discoverVSCodeCodexLogFiles(userDataPath, sessionContext.sessionDir, sessionContext.windowDirName)
+    : [];
+  if (vscodeCodexLogPaths.length > 0) {
+    log(`VSCode Codex.log候选文件: ${vscodeCodexLogPaths.join(" | ")}`);
+  }
+
+  const candidateSources = new Map<string, "renderer" | "vscode-copilot-chat-log" | "vscode-codex-log">();
+  for (const filePath of rendererLogPaths) {
+    candidateSources.set(filePath, "renderer");
+  }
+  for (const filePath of vscodeCopilotChatLogPaths) {
+    if (!candidateSources.has(filePath)) {
+      candidateSources.set(filePath, "vscode-copilot-chat-log");
+    }
+  }
+  for (const filePath of vscodeCodexLogPaths) {
+    if (!candidateSources.has(filePath)) {
+      candidateSources.set(filePath, "vscode-codex-log");
+    }
+  }
+
   let inferredChatActive = false;
 
-  for (const filePath of rendererLogPaths) {
+  for (const [filePath, source] of candidateSources.entries()) {
     try {
       const initialOffset = getFileSize(filePath);
-      if (!inferredChatActive && inferChatGenerationActiveFromLog(filePath)) {
+      if (source === "renderer"
+        && !inferredChatActive
+        && inferChatGenerationActiveFromLog(filePath, source)) {
         inferredChatActive = true;
       }
       const watcher = fs.watch(filePath, (eventType) => {
@@ -370,29 +524,33 @@ function startRendererWatchers(context: vscode.ExtensionContext): void {
 
       rendererWatchers.push({
         filePath,
+        source,
         watcher,
         readOffsetBytes: initialOffset,
         pendingLine: "",
         pollTimer
       });
     } catch (error) {
-      log(`renderer日志监听初始化失败: file=${filePath}, error=${String(error instanceof Error ? error.message : error)}`);
+      log(`${source}日志监听初始化失败: file=${filePath}, error=${String(error instanceof Error ? error.message : error)}`);
     }
   }
 
-  if (rendererWatchers.length === 0) {
+  if (rendererWatchers.length === 0 && !claudeMonitoringReady) {
     void vscode.window.showWarningMessage(t("noRenderer"));
   } else {
-    log(`renderer日志监听已启动: count=${rendererWatchers.length}`);
+    log(`日志监听已启动: count=${rendererWatchers.length}, claude=${claudeMonitoringReady ? "on" : "off"}`);
     if (monitorState === "armed" && inferredChatActive) {
       chatGenerationActive = true;
       setState("monitoring");
-      log("根据历史renderer日志判定: 开启监控时聊天已在生成中");
+      log("根据历史日志判定: 开启监控时聊天已在生成中");
     }
   }
 }
 
-function inferChatGenerationActiveFromLog(filePath: string): boolean {
+function inferChatGenerationActiveFromLog(
+  filePath: string,
+  source: "renderer" | "vscode-copilot-chat-log" | "vscode-codex-log"
+): boolean {
   const fileSize = getFileSize(filePath);
   if (fileSize <= 0) {
     return false;
@@ -411,24 +569,78 @@ function inferChatGenerationActiveFromLog(filePath: string): boolean {
     fs.readSync(fd, buffer, 0, bytesToRead, readStart);
     const lines = buffer.toString("utf8").split(/\r?\n/);
     let active = false;
+    let lastRelevantAt = 0;
 
     for (const line of lines) {
-      const lower = line.toLowerCase();
-      const isChatStart = lower.includes("reason=\"agent-loop\"")
-        && (lower.includes("composerwakelockmanager") || lower.includes("acquired wakelock") || lower.includes("[buildrequestedmodel]"));
-      const isTakingLongerThanExpected = isSlowResponseHintLine(lower);
-      const isChatEnd = lower.includes("reason=\"generation-ended\"")
-        && (lower.includes("composerwakelockmanager") || lower.includes("released wakelock"));
+      if (source === "renderer") {
+        const lower = line.toLowerCase();
+        const isChatStart = lower.includes("reason=\"agent-loop\"")
+          && (lower.includes("composerwakelockmanager") || lower.includes("acquired wakelock") || lower.includes("[buildrequestedmodel]"));
+        const isTakingLongerThanExpected = isSlowResponseHintLine(lower);
+        const isChatEnd = lower.includes("reason=\"generation-ended\"")
+          && (lower.includes("composerwakelockmanager") || lower.includes("released wakelock"));
 
-      if (isChatStart || isTakingLongerThanExpected) {
-        active = true;
+        if (isChatStart || isTakingLongerThanExpected) {
+          active = true;
+          continue;
+        }
+        if (isChatEnd) {
+          active = false;
+        }
         continue;
       }
-      if (isChatEnd) {
+
+      if (source === "vscode-copilot-chat-log") {
+        const lower = line.toLowerCase();
+        const isChatStart = isVSCodeCopilotChatLogStartLine(lower);
+        const isTakingLongerThanExpected = isSlowResponseHintLine(lower);
+        const isTerminal = isVSCodeCopilotTerminalLine(lower);
+        const isChatActivity = isVSCodeCopilotChatLogActivityLine(lower);
+        const eventAt = parseVSCodeLogLineTimestamp(line) ?? Date.now();
+        if (isChatStart || isTakingLongerThanExpected) {
+          active = true;
+          lastRelevantAt = eventAt;
+          continue;
+        }
+        if (isTerminal) {
+          active = false;
+          lastRelevantAt = eventAt;
+          continue;
+        }
+        if (isChatActivity && active) {
+          lastRelevantAt = eventAt;
+          continue;
+        }
+        continue;
+      }
+
+      const lower = line.toLowerCase();
+      const isCodexStreamActivity = isVSCodeCodexStreamActivityLine(lower);
+      const isCodexTerminal = isVSCodeCodexTerminalLine(lower);
+      const eventAt = parseVSCodeLogLineTimestamp(line) ?? Date.now();
+      if (isCodexStreamActivity) {
+        active = true;
+        lastRelevantAt = eventAt;
+        continue;
+      }
+      if (isCodexTerminal) {
         active = false;
+        lastRelevantAt = eventAt;
       }
     }
 
+    if (source === "vscode-copilot-chat-log") {
+      if (!active || lastRelevantAt <= 0) {
+        return false;
+      }
+      return Date.now() - lastRelevantAt <= VSCODE_COPILOT_INFER_ACTIVE_MAX_AGE_MS;
+    }
+    if (source === "vscode-codex-log") {
+      if (!active || lastRelevantAt <= 0) {
+        return false;
+      }
+      return Date.now() - lastRelevantAt <= VSCODE_CODEX_INFER_ACTIVE_MAX_AGE_MS;
+    }
     return active;
   } catch (error) {
     log(`历史renderer日志回看失败: file=${filePath}, error=${String(error instanceof Error ? error.message : error)}`);
@@ -468,7 +680,13 @@ function consumeRendererLogDelta(state: RendererWatcherState): void {
     state.pendingLine = lines.pop() ?? "";
 
     for (const line of lines) {
-      processRendererLine(line);
+      if (state.source === "vscode-copilot-chat-log") {
+        processVSCodeCopilotChatLogLine(line);
+      } else if (state.source === "vscode-codex-log") {
+        processVSCodeCodexLogLine(line);
+      } else {
+        processRendererLine(line);
+      }
     }
   } finally {
     fs.closeSync(fd);
@@ -497,7 +715,9 @@ function processRendererLine(line: string): void {
     if (monitorState === "armed" || monitorState === "monitoring") {
       setState("delayed");
     }
-    void sendSlowNotification("chat");
+    sendSlowNotification("chat").catch((error) => {
+      log(`长耗时通知错误: ${String(error instanceof Error ? error.message : error)}`);
+    });
     log("命中聊天长耗时提示: taking longer than expected");
     return;
   }
@@ -507,7 +727,9 @@ function processRendererLine(line: string): void {
   if (isChatEnd) {
     chatGenerationActive = false;
     log("命中聊天结束事件: renderer generation-ended released");
-    void handleChatGenerationEnded();
+    handleChatGenerationEnded().catch((error) => {
+      log(`聊天生成结束处理错误: ${String(error instanceof Error ? error.message : error)}`);
+    });
   }
 }
 
@@ -515,10 +737,435 @@ function isSlowResponseHintLine(lowerLine: string): boolean {
   return lowerLine.includes("taking longer than expected");
 }
 
+function processVSCodeCopilotChatLogLine(line: string): void {
+  const lower = line.toLowerCase();
+  if (!isVSCodeCopilotChatLogActivityLine(lower)) {
+    return;
+  }
+
+  // 记录最后一次活动时间戳（用于更精确的超时判定）
+  lastCopilotActivityAt = Date.now();
+
+  const isChatStart = isVSCodeCopilotChatLogStartLine(lower);
+  const isRenderCompleted = isVSCodeCopilotRenderCompletedLine(lower);
+  const isLikelyWorking = isVSCodeCopilotLikelyWorkingLine(lower);
+  if (isChatStart) {
+    if (!chatGenerationActive) {
+      chatGenerationActive = true;
+      registerActivity("chat");
+    }
+    log("命中VSCode Copilot Chat.log开始事件（发送/思考起点）");
+  } else if (!chatGenerationActive && isLikelyWorking) {
+    // 兜底：某些版本可能缺失 markdown 起始行，出现明确工作迹象时补记开始。
+    chatGenerationActive = true;
+    registerActivity("chat");
+    log("命中VSCode Copilot工作迹象（兜底补记开始）");
+  }
+
+  if (isRenderCompleted) {
+    if (!chatGenerationActive && (monitorState === "armed" || monitorState === "monitoring")) {
+      // 兜底：即使漏掉开始事件，也在终态时补记一次，以保证完成通知闭环。
+      chatGenerationActive = true;
+      registerActivity("chat");
+      log("命中渲染完成终态，但此前未捕获开始，已兜底补记");
+    }
+  }
+
+  if (chatGenerationActive && isRenderCompleted) {
+    chatGenerationActive = false;
+    log("命中VSCode Copilot渲染完成事件（面板已收敛）");
+    handleChatGenerationEnded().catch((error) => {
+      log(`聊天生成结束处理错误: ${String(error instanceof Error ? error.message : error)}`);
+    });
+    return;
+  }
+
+  const isTakingLongerThanExpected = isSlowResponseHintLine(lower);
+  if (isTakingLongerThanExpected) {
+    const wasActive = chatGenerationActive;
+    chatGenerationActive = true;
+    if (!wasActive) {
+      registerActivity("chat");
+    }
+    if (monitorState === "armed" || monitorState === "monitoring") {
+      setState("delayed");
+    }
+    sendSlowNotification("chat").catch((error) => {
+      log(`长耗时通知错误: ${String(error instanceof Error ? error.message : error)}`);
+    });
+    log("命中VSCode Copilot Chat.log长耗时提示: taking longer than expected");
+  }
+  refreshVSCodeCopilotChatIdleTimer();
+}
+
+function isVSCodeCopilotChatLogStartLine(lower: string): boolean {
+  return lower.includes("ccreq:")
+    && lower.includes(" | markdown")
+    && !lower.includes("latest entry:");
+}
+
+function isVSCodeCopilotChatLogActivityLine(lower: string): boolean {
+  return lower.includes("ccreq:")
+    || lower.includes("finish reason:")
+    || lower.includes("[messagesapi]")
+    || lower.includes("[toolcallingloop]")
+    || lower.includes("message 0 returned")
+    || lower.includes("requestid:");
+}
+
+function isVSCodeCopilotTerminalLine(lower: string): boolean {
+  return lower.includes("request done:")
+    || lower.includes("finish reason:")
+    || lower.includes(" | success |")
+    || lower.includes(" | cancelled |")
+    || lower.includes(" | failed |");
+}
+
+function isVSCodeCopilotRenderCompletedLine(lower: string): boolean {
+  return lower.includes("[toolcallingloop] stop hook result: shouldcontinue=false");
+}
+
+function isVSCodeCopilotLikelyWorkingLine(lower: string): boolean {
+  if (lower.includes("latest entry:")) {
+    return false;
+  }
+  if (isVSCodeCopilotRenderCompletedLine(lower)) {
+    return false;
+  }
+  return (lower.includes("ccreq:") && !isVSCodeCopilotTerminalLine(lower))
+    || isVSCodeCopilotEarlyResponseLine(lower)
+    || (lower.includes("[messagesapi]") && !lower.includes("finish reason:"))
+    || lower.includes("[panel/editagent]");
+}
+
+function isVSCodeCopilotEarlyResponseLine(lower: string): boolean {
+  if (!lower.includes("ccreq:")) {
+    return false;
+  }
+  // 这些阶段通常出现在真正渲染前，能更早代表“已开始工作”。
+  return lower.includes("[progressmessages]")
+    || lower.includes("[title]")
+    || lower.includes("[copilotlanguagemodelwrapper]");
+}
+
+function parseVSCodeLogLineTimestamp(line: string): number | undefined {
+  const match = line.match(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}\.\d{3})/);
+  if (!match) {
+    return undefined;
+  }
+  const parsed = Date.parse(`${match[1]}T${match[2]}`);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function refreshVSCodeCopilotChatIdleTimer(): void {
+  if (vscodeCopilotChatIdleTimer) {
+    clearTimeout(vscodeCopilotChatIdleTimer);
+    vscodeCopilotChatIdleTimer = undefined;
+  }
+  vscodeCopilotChatIdleTimer = setTimeout(() => {
+    if (!chatGenerationActive || monitorState === "idle" || monitorState === "notifying") {
+      return;
+    }
+
+    // 双重检查：确认最后活动时间确实超过了阈值，避免轮询延迟导致的误判
+    const timeSinceLastActivity = Date.now() - lastCopilotActivityAt;
+    if (timeSinceLastActivity < VSCODE_COPILOT_CHAT_IDLE_END_MS) {
+      log(`[防护] 活动时间戳检查：仅空闲${timeSinceLastActivity}ms（阈值${VSCODE_COPILOT_CHAT_IDLE_END_MS}ms），继续监控`);
+      refreshVSCodeCopilotChatIdleTimer();  // 重新设置计时器
+      return;
+    }
+
+    log(`VSCode Copilot Chat.log长时间静默（${timeSinceLastActivity}ms），触发兜底提醒但保持监控`);
+    if (monitorState === "armed" || monitorState === "monitoring") {
+      setState("delayed");
+    }
+    sendIdleFallbackNotification("chat").catch((error) => {
+      log(`超长未结束提醒处理错误: ${String(error instanceof Error ? error.message : error)}`);
+    });
+    refreshVSCodeCopilotChatIdleTimer();
+  }, VSCODE_COPILOT_CHAT_IDLE_END_MS);
+}
+
+function processVSCodeCodexLogLine(line: string): void {
+  const lower = line.toLowerCase();
+  const isStreamActivity = isVSCodeCodexStreamActivityLine(lower);
+  const isTerminal = isVSCodeCodexTerminalLine(lower);
+  const isTakingLongerThanExpected = isSlowResponseHintLine(lower);
+
+  if (isStreamActivity) {
+    if (!chatGenerationActive) {
+      chatGenerationActive = true;
+      registerActivity("chat");
+      log("命中VSCode Codex流式事件（开始/活跃）");
+    }
+    refreshVSCodeCodexStreamEndTimer();
+  }
+
+  if (isTakingLongerThanExpected) {
+    // 按 Codex 协议仅将 stream/read 作为生命周期节点；长耗时仅在活跃期告警。
+    if (chatGenerationActive && (monitorState === "armed" || monitorState === "monitoring")) {
+      setState("delayed");
+      sendSlowNotification("chat").catch((error) => {
+        log(`Codex长耗时通知错误: ${String(error instanceof Error ? error.message : error)}`);
+      });
+      log("命中VSCode Codex长耗时提示: taking longer than expected");
+    }
+  }
+
+  if (chatGenerationActive && isTerminal) {
+    chatGenerationActive = false;
+    clearVSCodeCodexStreamEndTimer();
+    log("命中VSCode Codex终态事件（thread-read-state-changed）");
+    handleChatGenerationEnded().catch((error) => {
+      log(`聊天生成结束处理错误: ${String(error instanceof Error ? error.message : error)}`);
+    });
+  }
+}
+
+function isVSCodeCodexStreamActivityLine(lower: string): boolean {
+  return lower.includes("method=thread-stream-state-changed");
+}
+
+function isVSCodeCodexTerminalLine(lower: string): boolean {
+  return lower.includes("method=thread-read-state-changed");
+}
+
+function refreshVSCodeCodexStreamEndTimer(): void {
+  clearVSCodeCodexStreamEndTimer();
+  vscodeCodexStreamEndTimer = setTimeout(() => {
+    if (!chatGenerationActive || monitorState === "idle" || monitorState === "notifying") {
+      return;
+    }
+    chatGenerationActive = false;
+    log("VSCode Codex流式事件静默超过10分钟，判定本轮输出结束");
+    handleChatGenerationEnded().catch((error) => {
+      log(`Codex静默结束处理错误: ${String(error instanceof Error ? error.message : error)}`);
+    });
+  }, VSCODE_CODEX_STREAM_IDLE_END_MS);
+}
+
+function clearVSCodeCodexStreamEndTimer(): void {
+  if (vscodeCodexStreamEndTimer) {
+    clearTimeout(vscodeCodexStreamEndTimer);
+    vscodeCodexStreamEndTimer = undefined;
+  }
+}
+
+function startClaudeSessionMonitoring(): boolean {
+  stopClaudeSessionMonitoring();
+  const claudeProjectsRoot = getClaudeProjectsRoot();
+  if (!claudeProjectsRoot || !fs.existsSync(claudeProjectsRoot)) {
+    log(`Claude会话目录不存在，跳过监听: ${claudeProjectsRoot || "(empty)"}`);
+    return false;
+  }
+
+  log(`启动Claude会话监听: root=${claudeProjectsRoot}`);
+  scanClaudeSessionFiles(claudeProjectsRoot);
+  claudeScanTimer = setInterval(() => {
+    if (monitorState === "idle" || monitorState === "notifying") {
+      return;
+    }
+    scanClaudeSessionFiles(claudeProjectsRoot);
+  }, CLAUDE_SCAN_INTERVAL_MS);
+  return true;
+}
+
+function stopClaudeSessionMonitoring(): void {
+  if (claudeScanTimer) {
+    clearInterval(claudeScanTimer);
+    claudeScanTimer = undefined;
+  }
+  claudeSessionStates.clear();
+}
+
+function scanClaudeSessionFiles(claudeProjectsRoot: string): void {
+  const files = collectClaudeJsonlFiles(claudeProjectsRoot);
+  const seen = new Set(files);
+
+  for (const filePath of files) {
+    if (!claudeSessionStates.has(filePath)) {
+      claudeSessionStates.set(filePath, {
+        filePath,
+        sessionId: path.basename(filePath, ".jsonl"),
+        readOffsetBytes: 0,
+        pendingLine: "",
+        lastActiveAt: 0,
+        active: false,
+        started: false
+      });
+      log(`发现新的Claude会话文件: session=${path.basename(filePath, ".jsonl")}, file=${filePath}`);
+    }
+
+    const state = claudeSessionStates.get(filePath);
+    if (state) {
+      consumeClaudeJsonlDelta(state);
+    }
+  }
+
+  for (const [filePath, state] of claudeSessionStates.entries()) {
+    if (!seen.has(filePath)) {
+      // 文件被删除/轮转时保留最近状态，按空闲超时自然收敛，不立刻触发结束。
+      continue;
+    }
+    if (!state.active || state.lastActiveAt <= 0) {
+      continue;
+    }
+    const idleMs = Date.now() - state.lastActiveAt;
+    if (idleMs < getClaudeIdleTimeoutMs()) {
+      continue;
+    }
+    state.active = false;
+    const endTs = state.lastTimestamp ?? "(unknown)";
+    log(`Claude会话结束(空闲超时): session=${state.sessionId}, lastTimestamp=${endTs}`);
+    if (!hasActiveClaudeSessions() && chatGenerationActive) {
+      chatGenerationActive = false;
+      handleChatGenerationEnded().catch((error) => {
+        log(`Claude会话结束处理错误: ${String(error instanceof Error ? error.message : error)}`);
+      });
+    }
+  }
+}
+
+function collectClaudeJsonlFiles(rootDir: string): string[] {
+  const files: string[] = [];
+  const stack: string[] = [rootDir];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) {
+      continue;
+    }
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(full);
+        continue;
+      }
+      if (entry.isFile() && entry.name.toLowerCase().endsWith(".jsonl")) {
+        files.push(full);
+      }
+    }
+  }
+  return files;
+}
+
+function consumeClaudeJsonlDelta(state: ClaudeSessionState): void {
+  const fileSize = getFileSize(state.filePath);
+  if (fileSize < state.readOffsetBytes) {
+    state.readOffsetBytes = 0;
+    state.pendingLine = "";
+  }
+  const bytesToRead = fileSize - state.readOffsetBytes;
+  if (bytesToRead <= 0) {
+    return;
+  }
+
+  const fd = fs.openSync(state.filePath, "r");
+  try {
+    const buffer = Buffer.alloc(bytesToRead);
+    fs.readSync(fd, buffer, 0, bytesToRead, state.readOffsetBytes);
+    state.readOffsetBytes = fileSize;
+
+    const text = state.pendingLine + buffer.toString("utf8");
+    const lines = text.split(/\r?\n/);
+    state.pendingLine = lines.pop() ?? "";
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) {
+        continue;
+      }
+      processClaudeJsonlLine(state, line);
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function processClaudeJsonlLine(state: ClaudeSessionState, line: string): void {
+  let type = "unknown";
+  let tsIso = new Date().toISOString();
+  let activeAt = Date.now();
+
+  try {
+    const parsed = JSON.parse(line) as { type?: unknown; timestamp?: unknown };
+    if (typeof parsed.type === "string" && parsed.type.trim()) {
+      type = parsed.type.trim();
+    }
+    const parsedTs = parseTimestampToIso(parsed.timestamp);
+    if (parsedTs) {
+      tsIso = parsedTs.iso;
+      activeAt = parsedTs.ms;
+    }
+  } catch {
+    // 兼容非JSON行，仍按活跃处理
+  }
+
+  if (!state.started) {
+    state.started = true;
+    state.firstTimestamp = tsIso;
+    state.active = true;
+    state.lastActiveAt = activeAt;
+    state.lastTimestamp = tsIso;
+    chatGenerationActive = true;
+    registerActivity("chat");
+    log(`Claude会话开始: session=${state.sessionId}, firstTimestamp=${state.firstTimestamp}`);
+    return;
+  }
+
+  state.active = true;
+  state.lastActiveAt = activeAt;
+  state.lastTimestamp = tsIso;
+  log(`Claude会话活跃: session=${state.sessionId}, type=${type}, timestamp=${tsIso}`);
+
+  if (!chatGenerationActive) {
+    chatGenerationActive = true;
+    registerActivity("chat");
+  }
+}
+
+function hasActiveClaudeSessions(): boolean {
+  for (const state of claudeSessionStates.values()) {
+    if (state.active) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function parseTimestampToIso(value: unknown): { iso: string; ms: number } | undefined {
+  if (typeof value === "string") {
+    const ms = Date.parse(value);
+    if (Number.isFinite(ms)) {
+      return { iso: new Date(ms).toISOString(), ms };
+    }
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    // 兼容秒级时间戳
+    const ms = value > 1e12 ? value : value * 1000;
+    return { iso: new Date(ms).toISOString(), ms };
+  }
+  return undefined;
+}
+
+function getClaudeProjectsRoot(): string {
+  const userHome = process.env.HOME || process.env.USERPROFILE || "";
+  if (!userHome) {
+    return "";
+  }
+  return path.join(userHome, ".claude", "projects");
+}
+
 function discoverRendererLogFiles(baseLogPath: string): string[] {
   const unique = new Set<string>();
   const now = Date.now();
   const recentThresholdMs = 30 * 60 * 1000;
+
+  log(`使用IDE配置 ${detectedIDEType} 发现日志，baseLogPath: ${baseLogPath}`);
 
   const contextInfo = locateSessionAndWindow(baseLogPath);
   if (contextInfo.sessionDir) {
@@ -528,6 +1175,7 @@ function discoverRendererLogFiles(baseLogPath: string): string[] {
     log(`检测到当前窗口目录: ${contextInfo.windowDirName}`);
   }
 
+  // 第一阶段：从baseLogPath向上搜索renderer.log
   let current = baseLogPath;
   for (let i = 0; i <= MAX_RENDERER_SEARCH_DEPTH; i += 1) {
     const candidate = path.join(current, "renderer.log");
@@ -586,12 +1234,248 @@ function discoverRendererLogFiles(baseLogPath: string): string[] {
     }
   }
 
+  // IDE特定的补充搜索策略
+  if (unique.size === 0) {
+    searchIDESpecificLogPaths(userDataPath, unique, now, recentThresholdMs);
+  }
+
   const result = Array.from(unique).sort((a, b) => getFileMtimeMs(b) - getFileMtimeMs(a));
   for (const filePath of result) {
     const mtime = getFileMtimeMs(filePath);
     log(`renderer候选详情: file=${filePath}, mtime=${mtime > 0 ? new Date(mtime).toISOString() : "unknown"}`);
   }
   return result;
+}
+
+function searchIDESpecificLogPaths(
+  userDataPath: string,
+  unique: Set<string>,
+  now: number,
+  recentThresholdMs: number
+): void {
+  log(`执行IDE特定日志搜索: IDE=${detectedIDEType}, basePath=${userDataPath}`);
+  
+  if (!fs.existsSync(userDataPath)) {
+    log(`用户数据路径不存在: ${userDataPath}`);
+    return;
+  }
+
+  const logsDir = path.join(userDataPath, "logs");
+  if (!fs.existsSync(logsDir)) {
+    log(`日志目录不存在: ${logsDir}`);
+    return;
+  }
+
+  try {
+    const sessionDirs = fs.readdirSync(logsDir, { withFileTypes: true });
+    for (const sessionEntry of sessionDirs) {
+      if (!sessionEntry.isDirectory()) {
+        continue;
+      }
+      
+      // 匹配时间戳格式的目录（YYYYMMDDTHHMMSS）
+      if (!/^\d{8}T\d{6}$/.test(sessionEntry.name)) {
+        continue;
+      }
+
+      const sessionPath = path.join(logsDir, sessionEntry.name);
+      const mtime = getFileMtimeMs(sessionPath);
+      
+      // 只检查最近30分钟内的会话
+      if (mtime > 0 && now - mtime > recentThresholdMs) {
+        continue;
+      }
+
+      // 搜索该会话下所有window目录下的renderer.log
+      try {
+        const entries = fs.readdirSync(sessionPath, { withFileTypes: true });
+        for (const entry of entries) {
+          if (!entry.isDirectory() || !entry.name.toLowerCase().startsWith("window")) {
+            continue;
+          }
+          
+          const rendererPath = path.join(sessionPath, entry.name, "renderer.log");
+          const size = getFileSize(rendererPath);
+          if (size > 0) {
+            unique.add(rendererPath);
+            log(`[IDE搜索] 发现renderer.log: ${rendererPath}`);
+          }
+        }
+      } catch (error) {
+        log(`[IDE搜索] 扫描会话失败: ${sessionPath}, error=${String(error instanceof Error ? error.message : error)}`);
+      }
+    }
+  } catch (error) {
+    log(`[IDE搜索] 扫描logs目录失败: ${logsDir}, error=${String(error instanceof Error ? error.message : error)}`);
+  }
+}
+
+function discoverVSCodeCopilotChatLogFiles(
+  baseUserDataPath: string,
+  currentSessionDir?: string,
+  currentWindowDirName?: string
+): string[] {
+  const unique = new Set<string>();
+  const logsDir = path.join(baseUserDataPath, "logs");
+  if (!fs.existsSync(logsDir)) {
+    return [];
+  }
+
+  if (currentSessionDir && currentWindowDirName) {
+    const baseWindowKey = currentWindowDirName.match(/^window\d+/i)?.[0] ?? currentWindowDirName;
+    try {
+      const entries = fs.readdirSync(currentSessionDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) {
+          continue;
+        }
+        const nameLower = entry.name.toLowerCase();
+        const baseLower = baseWindowKey.toLowerCase();
+        if (!(nameLower === baseLower || nameLower.startsWith(`${baseLower}_wb`))) {
+          continue;
+        }
+        const chatLogPath = path.join(
+          currentSessionDir,
+          entry.name,
+          "exthost",
+          "GitHub.copilot-chat",
+          "GitHub Copilot Chat.log"
+        );
+        if (getFileSize(chatLogPath) > 0) {
+          unique.add(chatLogPath);
+        }
+      }
+    } catch (error) {
+      log(`扫描当前会话Copilot Chat.log失败: dir=${currentSessionDir}, error=${String(error instanceof Error ? error.message : error)}`);
+    }
+    if (unique.size > 0) {
+      return Array.from(unique).sort((a, b) => getFileMtimeMs(b) - getFileMtimeMs(a));
+    }
+  }
+
+  try {
+    const sessionDirs = fs.readdirSync(logsDir, { withFileTypes: true });
+    let latestSessionPath = "";
+    let latestSessionMtime = 0;
+    for (const sessionDir of sessionDirs) {
+      if (!sessionDir.isDirectory() || !/^\d{8}T\d{6}$/i.test(sessionDir.name)) {
+        continue;
+      }
+      const sessionPath = path.join(logsDir, sessionDir.name);
+      const mtime = getFileMtimeMs(sessionPath);
+      if (mtime > latestSessionMtime) {
+        latestSessionMtime = mtime;
+        latestSessionPath = sessionPath;
+      }
+    }
+    if (!latestSessionPath) {
+      return [];
+    }
+    const windowDirs = fs.readdirSync(latestSessionPath, { withFileTypes: true });
+    for (const windowDir of windowDirs) {
+      if (!windowDir.isDirectory() || !windowDir.name.toLowerCase().startsWith("window")) {
+        continue;
+      }
+      const chatLogPath = path.join(
+        latestSessionPath,
+        windowDir.name,
+        "exthost",
+        "GitHub.copilot-chat",
+        "GitHub Copilot Chat.log"
+      );
+      if (getFileSize(chatLogPath) > 0) {
+        unique.add(chatLogPath);
+      }
+    }
+  } catch (error) {
+    log(`扫描VSCode logs目录失败: dir=${logsDir}, error=${String(error instanceof Error ? error.message : error)}`);
+  }
+
+  return Array.from(unique).sort((a, b) => getFileMtimeMs(b) - getFileMtimeMs(a));
+}
+
+function discoverVSCodeCodexLogFiles(
+  baseUserDataPath: string,
+  currentSessionDir?: string,
+  currentWindowDirName?: string
+): string[] {
+  const unique = new Set<string>();
+  const logsDir = path.join(baseUserDataPath, "logs");
+  if (!fs.existsSync(logsDir)) {
+    return [];
+  }
+
+  if (currentSessionDir && currentWindowDirName) {
+    const baseWindowKey = currentWindowDirName.match(/^window\d+/i)?.[0] ?? currentWindowDirName;
+    try {
+      const entries = fs.readdirSync(currentSessionDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) {
+          continue;
+        }
+        const nameLower = entry.name.toLowerCase();
+        const baseLower = baseWindowKey.toLowerCase();
+        if (!(nameLower === baseLower || nameLower.startsWith(`${baseLower}_wb`))) {
+          continue;
+        }
+        const codexLogPath = path.join(
+          currentSessionDir,
+          entry.name,
+          "exthost",
+          "openai.chatgpt",
+          "Codex.log"
+        );
+        if (getFileSize(codexLogPath) > 0) {
+          unique.add(codexLogPath);
+        }
+      }
+    } catch (error) {
+      log(`扫描当前会话Codex.log失败: dir=${currentSessionDir}, error=${String(error instanceof Error ? error.message : error)}`);
+    }
+    if (unique.size > 0) {
+      return Array.from(unique).sort((a, b) => getFileMtimeMs(b) - getFileMtimeMs(a));
+    }
+  }
+
+  try {
+    const sessionDirs = fs.readdirSync(logsDir, { withFileTypes: true });
+    let latestSessionPath = "";
+    let latestSessionMtime = 0;
+    for (const sessionDir of sessionDirs) {
+      if (!sessionDir.isDirectory() || !/^\d{8}T\d{6}$/i.test(sessionDir.name)) {
+        continue;
+      }
+      const sessionPath = path.join(logsDir, sessionDir.name);
+      const mtime = getFileMtimeMs(sessionPath);
+      if (mtime > latestSessionMtime) {
+        latestSessionMtime = mtime;
+        latestSessionPath = sessionPath;
+      }
+    }
+    if (!latestSessionPath) {
+      return [];
+    }
+    const windowDirs = fs.readdirSync(latestSessionPath, { withFileTypes: true });
+    for (const windowDir of windowDirs) {
+      if (!windowDir.isDirectory() || !windowDir.name.toLowerCase().startsWith("window")) {
+        continue;
+      }
+      const codexLogPath = path.join(
+        latestSessionPath,
+        windowDir.name,
+        "exthost",
+        "openai.chatgpt",
+        "Codex.log"
+      );
+      if (getFileSize(codexLogPath) > 0) {
+        unique.add(codexLogPath);
+      }
+    }
+  } catch (error) {
+    log(`扫描VSCode Codex日志目录失败: dir=${logsDir}, error=${String(error instanceof Error ? error.message : error)}`);
+  }
+
+  return Array.from(unique).sort((a, b) => getFileMtimeMs(b) - getFileMtimeMs(a));
 }
 
 function locateSessionAndWindow(baseLogPath: string): { sessionDir?: string; windowDirName?: string } {
@@ -640,6 +1524,12 @@ function getIdleTimeout(): number {
   return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_EDITOR_IDLE_TIMEOUT_MS;
 }
 
+function getClaudeIdleTimeoutMs(): number {
+  const configured = vscode.workspace.getConfiguration("boomerang").get<number>("claudeIdleSeconds", DEFAULT_CLAUDE_IDLE_SECONDS);
+  const seconds = Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_CLAUDE_IDLE_SECONDS;
+  return seconds * 1000;
+}
+
 function buildNotificationMessage(sourceLabel: string): string {
   const config = vscode.workspace.getConfiguration("boomerang");
   const customTemplate = config.get<string>("notificationTemplate", "").trim();
@@ -657,6 +1547,13 @@ function buildSlowNotificationMessage(sourceLabel: string): string {
     return `⏳ AI 输出出现长耗时，可能是网络波动或连接短暂异常。建议你看一眼聊天窗口确认状态。（来源：${sourceLabel}）`;
   }
   return `⏳ AI output is taking longer than expected. This may indicate network jitter or a temporary connection issue. Please check the chat window. (${sourceLabel})`;
+}
+
+function buildIdleFallbackNotificationMessage(sourceLabel: string): string {
+  if (locale === "zh-CN") {
+    return `⌛ AI 已经 10 分钟还没结束，这一轮可能卡住或异常中断。你要不回来看看？（来源：${sourceLabel}）`;
+  }
+  return `⌛ AI has not finished for 10 minutes. This run might be stuck or interrupted. Please come back and take a look. (${sourceLabel})`;
 }
 
 async function syncTargetValueExample(channel: PushChannel): Promise<void> {
@@ -683,10 +1580,19 @@ async function syncTargetValueExample(channel: PushChannel): Promise<void> {
 
 function disarmMonitoring(): void {
   resetIdleTimer();
+  if (vscodeCopilotChatIdleTimer) {
+    clearTimeout(vscodeCopilotChatIdleTimer);
+    vscodeCopilotChatIdleTimer = undefined;
+  }
+  clearVSCodeCodexStreamEndTimer();
   stopRendererWatchers();
+  stopClaudeSessionMonitoring();
   chatGenerationActive = false;
   slowNotificationSent = false;
   slowNotificationInFlight = false;
+  idleFallbackNotificationSent = false;
+  idleFallbackNotificationInFlight = false;
+  lastCopilotActivityAt = 0;  // 重置活动时间戳
   log("监控解除并重置状态");
   setState("idle");
 }

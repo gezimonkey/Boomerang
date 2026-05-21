@@ -2,7 +2,7 @@
   "name": "boomerang-notifier",
   "displayName": "AI Completion Notifier - Boomerang",
   "description": "Get instant phone alerts when Cursor or VS Code AI output finishes via multi-channel push services and webhooks.",
-  "version": "0.2.0",
+  "version": "0.2.3",
   "icon": "assets/logo.png",
   "publisher": "gezimonkey",
   "repository": {
@@ -57,6 +57,12 @@
           "default": 8000,
           "minimum": 1000,
           "description": "Idle timeout threshold in milliseconds."
+        },
+        "boomerang.claudeIdleSeconds": {
+          "type": "number",
+          "default": 600,
+          "minimum": 1,
+          "description": "Claude JSONL session idle timeout in seconds."
         },
         "boomerang.notificationTemplate": {
           "type": "string",

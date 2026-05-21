@@ -26,6 +26,15 @@ Boomerang Notifier 是一个 VS Code / Cursor 插件，用于在 AI 代码生成
 - 状态栏一键开启/关闭监控。
 - 支持带 emoji 的友好界面提示，并支持英文/简体中文自动切换。
 
+## 🧩 兼容性
+
+- 不支持 VS Code `< 1.90`。
+- 在 VS Code 中，Boomerang 支持以下聊天生命周期日志：
+  - `GitHub Copilot Chat.log`（`exthost/GitHub.copilot-chat/GitHub Copilot Chat.log`）
+  - `Codex.log`（`exthost/openai.chatgpt/Codex.log`）
+- Claude 本地会话日志：
+  - `~/.claude/projects/**/*.jsonl`（新文件=会话开始；新行追加=会话活跃；空闲超时=会话结束）
+
 ## ⚙️ 配置项
 
 在设置里搜索 `boomerang`：
@@ -36,6 +45,8 @@ Boomerang Notifier 是一个 VS Code / Cursor 插件，用于在 AI 代码生成
 通道目标值，支持 `main|keyword` 格式。
 - `boomerang.idleTimeout`  
 静止阈值（毫秒）。
+- `boomerang.claudeIdleSeconds`  
+Claude JSONL 会话空闲结束阈值（秒，默认 `600`）。
 - `boomerang.notificationTemplate`  
 完成通知模板（支持 `{source}` 占位符）。
 
